@@ -1,12 +1,21 @@
 <?php
 
 use App\Http\Controllers\PassController;
+use App\Http\Controllers\PublicRegistrationController;
 use App\Http\Controllers\Panel\BusinessController;
 use App\Http\Controllers\Panel\ClientController;
 use App\Http\Controllers\WalletWebServiceController;
 use Illuminate\Support\Facades\Route;
 
 Route::get('/', fn () => redirect()->route('panel.clients.index'));
+
+/*
+|--------------------------------------------------------------------------
+| Alta pública (el QR general del local apunta aquí)
+|--------------------------------------------------------------------------
+*/
+Route::get('registro', [PublicRegistrationController::class, 'create'])->name('register.create');
+Route::post('registro', [PublicRegistrationController::class, 'store'])->name('register.store');
 
 /*
 |--------------------------------------------------------------------------
