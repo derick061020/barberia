@@ -1,0 +1,107 @@
+# =============================================================================
+# Barbería Wallet — stack para Portainer
+# SSL/HTTPS lo gestiona Cloudflare por delante; aquí solo servimos HTTP.
+#
+# Cómo desplegar en Portainer:
+#   1. Stacks → Add stack → Repository (apunta a este repo git) — o pega este YAML.
+#   2. En "Environment variables" define al menos:  APP_KEY  y  APP_URL
+#      (más las credenciales de Apple/Google cuando las tengas).
+#   3. Deploy.
+#   4. Sube los certificados al host, en la carpeta del stack:
+#         storage/app/passkit/certs/{cert.pem,key.pem,wwdr.pem}
+#         storage/app/passkit/assets/icon.png     (obligatorio para Apple)
+#         storage/app/passkit/google-service-account.json
+#      (o con: docker cp cert.pem <contenedor_app>:/app/storage/app/passkit/certs/)
+#
+# Genera el APP_KEY una vez con:
+#     echo "base64:$(openssl rand -base64 32)"
+#
+# En Cloudflare: registro DNS (proxied) → apunta a la IP del host, puerto ${APP_PORT}.
+# SSL/TLS mode "Full" (recomendado) o "Flexible". APP_URL debe ser la URL https pública.
+# =============================================================================
+
+x-laravel-env: &laravel-env
+  APP_NAME: "Barbería Wallet"
+  APP_ENV: production
+  APP_DEBUG: "false"
+  # URL pública HTTPS (la de Cloudflare). Ej: https://wallet.tudominio.com
+  APP_URL: "${APP_URL:?define APP_URL, p.ej. https://wallet.tudominio.com}"
+  # Genérala con: echo "base64:$(openssl rand -base64 32)"
+  APP_KEY: "${APP_KEY:?define APP_KEY (openssl rand -base64 32 con prefijo base64:)}"
+
+  # Confiar en el proxy de Cloudflare (para que Laravel detecte https)
+  TRUSTED_PROXIES: "*"
+
+  # Base de datos SQLite (persiste en ./database del host vía bind mount)
+  DB_CONNECTION: sqlite
+  DB_DATABASE: /app/database/database.sqlite
+
+  QUEUE_CONNECTION: database
+  SESSION_DRIVER: database
+  CACHE_STORE: database
+  LOG_CHANNEL: stderr
+  LOG_LEVEL: warning
+
+  # ---- Apple Wallet ----
+  APPLE_PASS_TYPE_ID: "${APPLE_PASS_TYPE_ID:-}"
+  APPLE_TEAM_ID: "${APPLE_TEAM_ID:-}"
+  APPLE_ORG_NAME: "${APPLE_ORG_NAME:-Barbería}"
+  APPLE_CERT_PASSWORD: "${APPLE_CERT_PASSWORD:-}"
+
+  # ---- Google Wallet ----
+  GOOGLE_WALLET_ISSUER_ID: "${GOOGLE_WALLET_ISSUER_ID:-}"
+  GOOGLE_WALLET_CLASS_SUFFIX: "${GOOGLE_WALLET_CLASS_SUFFIX:-barberia_loyalty}"
+  GOOGLE_WALLET_ORIGINS: "${GOOGLE_WALLET_ORIGINS:-}"
+
+services:
+  # 1) Init: instala dependencias, migra la BD y cachea la config. Corre una vez.
+  init:
+    image: webdevops/php-nginx:8.3-alpine
+    working_dir: /app
+    volumes:
+      - ./:/app
+    environment: *laravel-env
+    entrypoint: ["/bin/sh", "-lc"]
+    command:
+      - |
+        set -e
+        composer install --no-dev --optimize-autoloader --no-interaction
+        mkdir -p storage/app/passkit/certs storage/app/passkit/assets \
+                 storage/framework/cache storage/framework/sessions storage/framework/views \
+                 storage/logs bootstrap/cache
+        [ -f database/database.sqlite ] || touch database/database.sqlite
+        php artisan migrate --force
+        php artisan config:cache
+        php artisan route:cache
+        php artisan view:cache
+        chown -R application:application storage bootstrap/cache database 2>/dev/null || true
+    restart: "no"
+
+  # 2) Web: sirve el panel + los pases por HTTP (Cloudflare pone el HTTPS delante).
+  app:
+    image: webdevops/php-nginx:8.3-alpine
+    working_dir: /app
+    depends_on:
+      init:
+        condition: service_completed_successfully
+    volumes:
+      - ./:/app
+    environment:
+      <<: *laravel-env
+      WEB_DOCUMENT_ROOT: /app/public
+    ports:
+      - "${APP_PORT:-8080}:80"
+    restart: unless-stopped
+
+  # 3) Worker: procesa la cola (push APNs de Apple). Sin esto, Apple no notifica.
+  worker:
+    image: webdevops/php-nginx:8.3-alpine
+    working_dir: /app
+    depends_on:
+      init:
+        condition: service_completed_successfully
+    volumes:
+      - ./:/app
+    environment: *laravel-env
+    command: ["php", "artisan", "queue:work", "--sleep=3", "--tries=3", "--max-time=3600"]
+    restart: unless-stopped

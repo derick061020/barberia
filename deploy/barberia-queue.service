@@ -1,0 +1,25 @@
+# Worker de la cola: procesa los push APNs de Apple (PushApplePassUpdate).
+# Copia a /etc/systemd/system/barberia-queue.service, luego:
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now barberia-queue
+#
+# Ver estado:  systemctl status barberia-queue
+# Ver logs:    journalctl -u barberia-queue -f
+
+[Unit]
+Description=Barberia Wallet queue worker
+After=network.target
+
+[Service]
+User=www-data
+Group=www-data
+Restart=always
+RestartSec=5
+# --stop-when-empty NO: queremos que quede escuchando siempre.
+# --tries=3 reintenta un job fallido antes de marcarlo failed.
+ExecStart=/usr/bin/php /var/www/barberia-wallet/artisan queue:work --sleep=3 --tries=3 --max-time=3600
+# Reinicio limpio para recoger código nuevo tras cada deploy.
+ExecReload=/bin/kill -USR2 $MAINPID
+
+[Install]
+WantedBy=multi-user.target

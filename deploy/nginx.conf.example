@@ -1,0 +1,39 @@
+# Barbería Wallet — Nginx site
+# Copia a /etc/nginx/sites-available/barberia y enlaza a sites-enabled.
+# Sustituye TU_DOMINIO y la versión de PHP-FPM si no es 8.3.
+#
+# Certbot (más abajo en DEPLOY.md) añadirá el bloque 443 + SSL automáticamente.
+
+server {
+    listen 80;
+    listen [::]:80;
+    server_name TU_DOMINIO;
+
+    root /var/www/barberia-wallet/public;
+    index index.php;
+
+    charset utf-8;
+
+    # Cuerpo del .pkpass / uploads (holgado)
+    client_max_body_size 20M;
+
+    location / {
+        try_files $uri $uri/ /index.php?$query_string;
+    }
+
+    location = /favicon.ico { access_log off; log_not_found off; }
+    location = /robots.txt  { access_log off; log_not_found off; }
+
+    error_page 404 /index.php;
+
+    location ~ \.php$ {
+        fastcgi_pass unix:/run/php/php8.3-fpm.sock;
+        fastcgi_param SCRIPT_FILENAME $realpath_root$fastcgi_script_name;
+        include fastcgi_params;
+    }
+
+    # No servir dotfiles ni .env
+    location ~ /\.(?!well-known).* {
+        deny all;
+    }
+}
